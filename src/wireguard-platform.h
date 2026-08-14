@@ -38,7 +38,8 @@
 #include <stdbool.h>
 
 // Peers are allocated statically inside the device structure to avoid malloc
-#define WIREGUARD_MAX_PEERS 1
+// Increased from 1 to support multiple Tailscale peers (16 peers for larger tailnets)
+#define WIREGUARD_MAX_PEERS 16
 #define WIREGUARD_MAX_SRC_IPS 2
 
 // Per device limit on accepting (valid) initiation requests - per peer

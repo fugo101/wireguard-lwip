@@ -1,5 +1,12 @@
 # WireGuard Implementation for lwIP
 
+> **This is a fork maintained by FuGo**, adding DERP relay + magicsock integration,
+> ESP-IDF 6.x/GCC 15 compatibility, an ESP-IDF component packaging (`CMakeLists.txt` +
+> `idf_component.yml`), and multi-peer support (16 peers) on top of Daniel Hope's
+> original work below. Published to the ESP Component Registry as
+> `fugo101/wireguard_lwip`, used by [fugo101/microlink](https://github.com/fugo101/microlink).
+> See `CHANGELOG.md` for what changed and why.
+
 This project is a C implementation of the [WireGuard&reg;](https://www.wireguard.com/) protocol intended to be used with the [lwIP IP stack](https://www.nongnu.org/lwip/)
 
 # Motivation

@@ -71,6 +71,21 @@
 #define REKEY_TIMEOUT				(5)
 #define KEEPALIVE_TIMEOUT			(10)
 
+// DERP relay output callback for peers without direct endpoints
+// peer_public_key: 32-byte public key to identify the destination peer
+// data: WireGuard packet to send (handshake or transport data)
+// len: length of data
+// Returns: ERR_OK on success, error code on failure
+typedef err_t (*wireguard_derp_output_fn)(const uint8_t *peer_public_key, const uint8_t *data, size_t len, void *ctx);
+
+// Callback for sending WireGuard packets via external UDP socket (magicsock mode)
+// dest_ip: destination IP in network byte order
+// dest_port: destination port in host byte order
+// data: WireGuard packet to send
+// len: length of data
+// Returns: ERR_OK on success, error code on failure
+typedef err_t (*wireguard_udp_output_fn)(uint32_t dest_ip, uint16_t dest_port, const uint8_t *data, size_t len, void *ctx);
+
 struct wireguard_keypair {
 	bool valid;
 	bool initiator; // Did we initiate this session (send the initiation packet rather than sending the response packet)
@@ -184,6 +199,17 @@ struct wireguard_device {
 
 	// List of peers associated with this device
  	struct wireguard_peer peers[WIREGUARD_MAX_PEERS];
+
+	// DERP relay output callback for peers without direct endpoints
+	wireguard_derp_output_fn derp_output_fn;
+	void *derp_output_ctx;
+
+	// UDP output callback for magicsock mode (external unified socket)
+	wireguard_udp_output_fn udp_output_fn;
+	void *udp_output_ctx;
+
+	// Force all peer output through DERP relay (cellular mode)
+	bool force_derp_output;
 
 	bool valid;
 };

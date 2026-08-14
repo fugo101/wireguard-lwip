@@ -40,6 +40,12 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Non-blocking until the `fugo101` namespace is approved on the ESP Component
+    # Registry (Espressif manual approval, tracked in fugo101/microlink's migration
+    # plan — Phase 3). Until then this step fails with "Namespace not found" even
+    # in dry-run mode, which is a real external dependency, not a bug here. Drop
+    # continue-on-error once the namespace exists.
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v7
       - uses: espressif/upload-components-ci-action@v2

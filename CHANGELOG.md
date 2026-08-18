@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/fugo101/wireguard-lwip/compare/v1.0.0...v1.0.1) (2026-08-18)
+
+
+### Bug Fixes
+
+* use wall-clock time for the WireGuard handshake timestamp ([#13](https://github.com/fugo101/wireguard-lwip/issues/13)) ([dd5e921](https://github.com/fugo101/wireguard-lwip/commit/dd5e921cd57253d8b428c949fe06034f522059bc))
+
 ## 1.0.0 (2026-08-14)
 
 

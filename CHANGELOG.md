@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.2](https://github.com/fugo101/wireguard-lwip/compare/v1.0.1...v1.0.2) (2026-08-19)
+
+
+### Bug Fixes
+
+* throttle handshake retries + preserve DERP routing for stale endpoints ([#15](https://github.com/fugo101/wireguard-lwip/issues/15)) ([e13cae5](https://github.com/fugo101/wireguard-lwip/commit/e13cae50e246d9642f2a011e4f0641885cd29486))
+
 ## [1.0.1](https://github.com/fugo101/wireguard-lwip/compare/v1.0.0...v1.0.1) (2026-08-18)
 
 

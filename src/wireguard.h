@@ -135,6 +135,10 @@ struct wireguard_peer {
 	// This is the latest received IP/port
 	ip_addr_t ip;
 	u16_t port;
+	// True if the latest received packet came through DERP (relay). In that
+	// case the stored ip/port above may not be directly reachable, so replies
+	// should keep using DERP rather than attempting the stale direct endpoint.
+	bool last_rx_via_derp;
 	// keep-alive interval in seconds, 0 is disable
 	uint16_t keepalive_interval;
 

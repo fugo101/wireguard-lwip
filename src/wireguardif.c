@@ -85,11 +85,13 @@ static void update_peer_addr(struct wireguard_peer *peer, const ip_addr_t *addr,
 	// This bug was causing DERP routing to break after receiving the first packet
 	if (ip_addr_isany(addr)) {
 		WG_DEBUG("[WG] update_peer_addr: skipping DERP (0.0.0.0)\n");
+		peer->last_rx_via_derp = true;
 		return;  // Skip updating endpoint for DERP packets
 	}
 	WG_DEBUG("[WG] update_peer_addr: %s:%u\n", ipaddr_ntoa(addr), port);
 	peer->ip = *addr;
 	peer->port = port;
+	peer->last_rx_via_derp = false;
 }
 
 static struct wireguard_peer *peer_lookup_by_allowed_ip(struct wireguard_device *device, const ip_addr_t *ipaddr) {
@@ -135,7 +137,12 @@ static err_t wireguardif_peer_output(struct netif *netif, struct pbuf *q, struct
 	// Check if peer has a direct endpoint (non-zero IP and port)
 	// If not, use DERP relay callback if available.
 	// force_derp_output: cellular mode — always route through DERP.
-	if (ip_addr_isany(&peer->ip) || peer->port == 0 || device->force_derp_output) {
+	// last_rx_via_derp: the last packet FROM this peer arrived via DERP, so
+	// the stored ip/port is stale (a prior direct endpoint that stopped being
+	// used) rather than genuinely unreachable -- route the reply back through
+	// DERP too instead of retrying a dead direct path.
+	if (ip_addr_isany(&peer->ip) || peer->port == 0 || device->force_derp_output ||
+	    peer->last_rx_via_derp) {
 		WG_DEBUG("[WG_OUT] No direct endpoint or force_derp, checking DERP\n");
 
 		if (device->derp_output_fn) {
@@ -1174,9 +1181,23 @@ void wireguardif_periodic(struct netif *netif) {
 
 	// Perform the same work as wireguardif_tmr but from the caller's task context,
 	// avoiding heavy crypto (X25519, ChaCha20-Poly1305) on the lwIP TCPIP thread.
+	//
+	// Throughput fix: wireguard_start_handshake() costs ~40ms per peer (X25519 +
+	// ChaCha20-Poly1305 + Curve25519 ECDH). With N peers eligible for retry on the
+	// same tick (typical: broken DERP-only peers that haven't seen an RX yet), the
+	// original "send to all" loop blocked the calling task for N * 40ms -- e.g.
+	// ~280ms with 7 peers. On this fork wireguardif_periodic() runs on the wg_mgr
+	// task, so that blockage delays DISCO/peer processing for the whole tunnel.
+	// Throttle to 1 init per tick + round-robin so each peer still gets a chance
+	// within WIREGUARD_MAX_PEERS ticks.
+	static int s_next_hs_peer_idx = 0;
+	int handshakes_this_tick = 0;
+	const int MAX_HANDSHAKES_PER_TICK = 1;
+
 	bool link_up = false;
 	for (x = 0; x < WIREGUARD_MAX_PEERS; x++) {
-		peer = &device->peers[x];
+		int peer_idx = (s_next_hs_peer_idx + x) % WIREGUARD_MAX_PEERS;
+		peer = &device->peers[peer_idx];
 		if (peer->valid) {
 			if (should_reset_peer(peer)) {
 				keypair_destroy(&peer->next_keypair);
@@ -1192,17 +1213,22 @@ void wireguardif_periodic(struct netif *netif) {
 				wireguardif_send_keepalive(device, peer);
 			}
 			if (should_send_initiation(peer)) {
-				printf("[WG_PERIODIC] Handshake retry wg_idx=%d key=%02x%02x%02x%02x "
-				       "ip=%s:%u connect_ip=%s:%u active=%d send_hs=%d\n",
-				       x,
-				       peer->public_key[0], peer->public_key[1],
-				       peer->public_key[2], peer->public_key[3],
-				       ip_addr_isany(&peer->ip) ? "0.0.0.0" : ipaddr_ntoa(&peer->ip),
-				       peer->port,
-				       ip_addr_isany(&peer->connect_ip) ? "0.0.0.0" : ipaddr_ntoa(&peer->connect_ip),
-				       peer->connect_port,
-				       peer->active, peer->send_handshake);
-				wireguard_start_handshake(device->netif, peer);
+				if (handshakes_this_tick < MAX_HANDSHAKES_PER_TICK) {
+					printf("[WG_PERIODIC] Handshake retry wg_idx=%d key=%02x%02x%02x%02x "
+					       "ip=%s:%u connect_ip=%s:%u active=%d send_hs=%d\n",
+					       peer_idx,
+					       peer->public_key[0], peer->public_key[1],
+					       peer->public_key[2], peer->public_key[3],
+					       ip_addr_isany(&peer->ip) ? "0.0.0.0" : ipaddr_ntoa(&peer->ip),
+					       peer->port,
+					       ip_addr_isany(&peer->connect_ip) ? "0.0.0.0" : ipaddr_ntoa(&peer->connect_ip),
+					       peer->connect_port,
+					       peer->active, peer->send_handshake);
+					wireguard_start_handshake(device->netif, peer);
+					handshakes_this_tick++;
+					s_next_hs_peer_idx = (peer_idx + 1) % WIREGUARD_MAX_PEERS;
+				}
+				// else: throttled this tick, next tick (round-robin) gets the chance
 			}
 			if ((peer->curr_keypair.valid) || (peer->prev_keypair.valid)) {
 				link_up = true;

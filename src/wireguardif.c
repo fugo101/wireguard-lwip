@@ -94,9 +94,25 @@ static void update_peer_addr(struct wireguard_peer *peer, const ip_addr_t *addr,
 	peer->last_rx_via_derp = false;
 }
 
+// Count leading 1-bits in an IPv4 netmask (e.g. 255.255.255.255 -> 32, 0.0.0.0 -> 0).
+// Used so a peer with a wide allowed_ip (e.g. an exit-node's 0.0.0.0/0 fallback route)
+// can never shadow another peer's more specific /32 route just because it happens to
+// sit earlier in the peers array.
+static int allowed_ip_prefix_len(const ip_addr_t *mask) {
+	uint32_t m = lwip_ntohl(ip_2_ip4(mask)->addr);
+	int bits = 0;
+	while (m & 0x80000000U) {
+		bits++;
+		m <<= 1;
+	}
+	return bits;
+}
+
 static struct wireguard_peer *peer_lookup_by_allowed_ip(struct wireguard_device *device, const ip_addr_t *ipaddr) {
 	struct wireguard_peer *result = NULL;
 	struct wireguard_peer *fallback = NULL;
+	int result_prefix = -1;
+	int fallback_prefix = -1;
 	struct wireguard_peer *tmp;
 	int x;
 	int y;
@@ -105,19 +121,21 @@ static struct wireguard_peer *peer_lookup_by_allowed_ip(struct wireguard_device 
 		if (tmp->valid) {
 			for (y=0; y < WIREGUARD_MAX_SRC_IPS; y++) {
 				if ((tmp->allowed_source_ips[y].valid) && IP_ADDR_NETCMP_COMPAT(ipaddr, &tmp->allowed_source_ips[y].ip, &tmp->allowed_source_ips[y].mask)) {
+					int prefix = allowed_ip_prefix_len(&tmp->allowed_source_ips[y].mask);
 					// Prefer peers with valid keypairs (can actually send encrypted data)
 					// This optimization is from GrieferPig's fork
 					if (tmp->curr_keypair.valid || tmp->prev_keypair.valid) {
-						result = tmp;
-						break;
-					} else if (!fallback) {
-						// Remember first match without valid keypair as fallback
+						if ((result == NULL) || (prefix > result_prefix)) {
+							result = tmp;
+							result_prefix = prefix;
+						}
+					} else if ((fallback == NULL) || (prefix > fallback_prefix)) {
+						// Remember most specific match without a valid keypair as fallback
 						fallback = tmp;
+						fallback_prefix = prefix;
 					}
-					break;
 				}
 			}
-			if (result) break;
 		}
 	}
 	return result ? result : fallback;

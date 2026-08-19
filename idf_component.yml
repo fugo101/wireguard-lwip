@@ -1,4 +1,4 @@
-version: "1.0.2"  # x-release-please-version
+version: "1.0.3"  # x-release-please-version
 description: >-
   WireGuard for lwIP, ESP-IDF port. Fork of smartalock/wireguard-lwip (BSD-3-Clause,
   Daniel Hope / floorsense.nz) maintained by FuGo — DERP relay + magicsock callbacks,

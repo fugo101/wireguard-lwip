@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.3](https://github.com/fugo101/wireguard-lwip/compare/v1.0.2...v1.0.3) (2026-08-19)
+
+
+### Bug Fixes
+
+* longest-prefix-match in peer_lookup_by_allowed_ip ([#17](https://github.com/fugo101/wireguard-lwip/issues/17)) ([c0d20de](https://github.com/fugo101/wireguard-lwip/commit/c0d20dea0101660dfd31e9117cce66875c952d47))
+
 ## [1.0.2](https://github.com/fugo101/wireguard-lwip/compare/v1.0.1...v1.0.2) (2026-08-19)
 
 

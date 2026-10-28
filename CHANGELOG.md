@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.4](https://github.com/fugo101/wireguard-lwip/compare/v1.0.3...v1.0.4) (2026-10-28)
+
+
+### Documentation
+
+* add CLAUDE.md and agent skills config ([#20](https://github.com/fugo101/wireguard-lwip/issues/20)) ([36e07dc](https://github.com/fugo101/wireguard-lwip/commit/36e07dc4cb5fbd07e3231e4ba364289f652d71d9))
+
 ## [1.0.3](https://github.com/fugo101/wireguard-lwip/compare/v1.0.2...v1.0.3) (2026-08-19)
 
 

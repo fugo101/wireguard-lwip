@@ -11,7 +11,8 @@
 static uint32_t clock_ms = 100000;
 static uint32_t rng = 0x2468ace1u;
 uint32_t wireguard_sys_now(void) { return clock_ms; }
-bool wireguard_is_under_load(void) { return false; }
+static bool under_load; /* what wireguard_is_under_load() reports; tests may set it */
+bool wireguard_is_under_load(void) { return under_load; }
 void wireguard_random_bytes(void *out, size_t n) {
     uint8_t *p = out;
     while (n--) { rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5; *p++ = (uint8_t)rng; }
@@ -24,8 +25,10 @@ void wireguard_tai64n_now(uint8_t *out) {
 uint32_t napt_test_random(void) { return rng; }
 
 /* --- minimal lwIP doubles (no host networking) --- */
+static bool pbuf_alloc_fails; /* tests may set it to simulate memory exhaustion */
 struct pbuf *pbuf_alloc(pbuf_layer l, u16_t len, pbuf_type t) {
     (void)l; (void)t;
+    if (pbuf_alloc_fails) return NULL;
     struct pbuf *p = calloc(1, sizeof(*p));
     if (!p) return NULL;
     p->payload = calloc(1, len ? len : 1); assert(p->payload);
@@ -44,7 +47,8 @@ void *mem_calloc(mem_size_t n, mem_size_t s) { return calloc(n, s); }
 void mem_free(void *p) { free(p); }
 void sys_timeout(u32_t ms, sys_timeout_handler h, void *a) { (void)ms; (void)h; (void)a; }
 void sys_untimeout(sys_timeout_handler h, void *a) { (void)h; (void)a; }
-void netif_set_link_up(struct netif *n) { n->flags |= NETIF_FLAG_LINK_UP; }
+static unsigned link_up_calls;
+void netif_set_link_up(struct netif *n) { link_up_calls++; n->flags |= NETIF_FLAG_LINK_UP; }
 void netif_set_link_down(struct netif *n) { n->flags &= (u8_t)~NETIF_FLAG_LINK_UP; }
 struct udp_pcb *udp_new(void) { return NULL; }
 err_t udp_bind(struct udp_pcb *p, const ip_addr_t *a, u16_t port) { (void)p; (void)a; (void)port; return ERR_OK; }

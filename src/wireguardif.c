@@ -109,10 +109,12 @@ static int allowed_ip_prefix_len(const ip_addr_t *mask) {
 }
 
 static struct wireguard_peer *peer_lookup_by_allowed_ip(struct wireguard_device *device, const ip_addr_t *ipaddr) {
+	// Cryptokey routing: the peer whose allowed IP is the longest prefix match for ipaddr, whatever its session state.
+	// A peer without a valid keypair must not lose its traffic to a wider route (e.g. an exit-node's 0.0.0.0/0):
+	// that peer would receive plaintext meant for someone else. wireguardif_output_to_peer() drops the packet
+	// instead (ERR_CONN); the timer keeps initiating to an active peer until its session is up.
 	struct wireguard_peer *result = NULL;
-	struct wireguard_peer *fallback = NULL;
 	int result_prefix = -1;
-	int fallback_prefix = -1;
 	struct wireguard_peer *tmp;
 	int x;
 	int y;
@@ -122,23 +124,15 @@ static struct wireguard_peer *peer_lookup_by_allowed_ip(struct wireguard_device 
 			for (y=0; y < WIREGUARD_MAX_SRC_IPS; y++) {
 				if ((tmp->allowed_source_ips[y].valid) && IP_ADDR_NETCMP_COMPAT(ipaddr, &tmp->allowed_source_ips[y].ip, &tmp->allowed_source_ips[y].mask)) {
 					int prefix = allowed_ip_prefix_len(&tmp->allowed_source_ips[y].mask);
-					// Prefer peers with valid keypairs (can actually send encrypted data)
-					// This optimization is from GrieferPig's fork
-					if (tmp->curr_keypair.valid || tmp->prev_keypair.valid) {
-						if ((result == NULL) || (prefix > result_prefix)) {
-							result = tmp;
-							result_prefix = prefix;
-						}
-					} else if ((fallback == NULL) || (prefix > fallback_prefix)) {
-						// Remember most specific match without a valid keypair as fallback
-						fallback = tmp;
-						fallback_prefix = prefix;
+					if (prefix > result_prefix) {
+						result = tmp;
+						result_prefix = prefix;
 					}
 				}
 			}
 		}
 	}
-	return result ? result : fallback;
+	return result;
 }
 
 static bool wireguardif_can_send_initiation(struct wireguard_peer *peer) {
@@ -450,6 +444,25 @@ static bool peer_add_ip(struct wireguard_peer *peer, ip_addr_t ip, ip_addr_t mas
 		}
 	}
 	return result;
+}
+
+// An allowed IP belongs to one peer only: the last one to add it, as in the Linux implementation. Without this, two peers
+// holding the same prefix (e.g. a node key rotated while the old peer is still listed) would both match, and the longest
+// prefix match would pick by peer index: transmit to the stale peer and drop everything the new one sends.
+static void device_remove_ip_from_others(struct wireguard_device *device, struct wireguard_peer *owner, const ip_addr_t *ip, const ip_addr_t *mask) {
+	struct wireguard_peer *tmp;
+	int x;
+	int y;
+	for (x=0; x < WIREGUARD_MAX_PEERS; x++) {
+		tmp = &device->peers[x];
+		if (tmp->valid && (tmp != owner)) {
+			for (y=0; y < WIREGUARD_MAX_SRC_IPS; y++) {
+				if ((tmp->allowed_source_ips[y].valid) && ip_addr_cmp(&tmp->allowed_source_ips[y].ip, ip) && ip_addr_cmp(&tmp->allowed_source_ips[y].mask, mask)) {
+					tmp->allowed_source_ips[y].valid = false;
+				}
+			}
+		}
+	}
 }
 
 static void wireguardif_process_data_message(struct wireguard_device *device, struct wireguard_peer *peer, struct message_transport_data *data_hdr, size_t data_len, const ip_addr_t *addr, u16_t port) {
@@ -1065,7 +1078,9 @@ err_t wireguardif_add_peer(struct netif *netif, struct wireguardif_peer *p, u8_t
 					} else {
 						peer->keepalive_interval = p->keep_alive;
 					}
-					peer_add_ip(peer, p->allowed_ip, p->allowed_mask);
+					if (peer_add_ip(peer, p->allowed_ip, p->allowed_mask)) {
+						device_remove_ip_from_others(device, peer, &p->allowed_ip, &p->allowed_mask);
+					}
 					memcpy(peer->greatest_timestamp, p->greatest_timestamp, sizeof(peer->greatest_timestamp));
 
 					result = ERR_OK;

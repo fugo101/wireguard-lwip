@@ -517,13 +517,14 @@ static void wireguardif_process_data_message(struct wireguard_device *device, st
 					keypair->last_rx = now;
 					peer->last_rx = now;
 
-					// Might need to shuffle next key --> current keypair
-					keypair_update(peer, keypair);
-
 					// Check to see if we should rekey
 					if (keypair->initiator && wireguard_expired(keypair->keypair_millis, REJECT_AFTER_TIME - peer->keepalive_interval - REKEY_TIMEOUT)) {
 						peer->send_handshake = true;
 					}
+
+					// Might need to shuffle next key --> current keypair
+					// Note: if this was the next keypair it has now been moved to current and keypair must not be used after this
+					keypair_update(peer, keypair);
 
 					// Make sure that link is reported as up
 					device->netif->state = NULL; netif_set_link_up(device->netif); device->netif->state = device;
@@ -1198,8 +1199,9 @@ static void wireguardif_tmr(void *arg) {
 				peer->handshake.valid = false;
 				peer->last_session_millis = 0;
 
-				// Revert back to the configured IP/port if these were altered - if there is no configured endpoint keep the learned one
-				if (!ip_addr_isany(&peer->connect_ip) && (peer->connect_port != 0)) {
+				// Revert back to the configured IP/port if these were altered - if there is no configured endpoint keep the learned one.
+				// A peer moved to DERP (wireguardif_connect_derp clears ip) stays on DERP: connect_ip may be a dead direct path
+				if (!ip_addr_isany(&peer->connect_ip) && (peer->connect_port != 0) && !ip_addr_isany(&peer->ip)) {
 					peer->ip = peer->connect_ip;
 					peer->port = peer->connect_port;
 				}
@@ -1268,7 +1270,7 @@ void wireguardif_periodic(struct netif *netif) {
 				crypto_zero(&peer->handshake, sizeof(struct wireguard_handshake));
 				peer->handshake.valid = false;
 				peer->last_session_millis = 0;
-				if (!ip_addr_isany(&peer->connect_ip) && (peer->connect_port != 0)) {
+				if (!ip_addr_isany(&peer->connect_ip) && (peer->connect_port != 0) && !ip_addr_isany(&peer->ip)) {
 					peer->ip = peer->connect_ip;
 					peer->port = peer->connect_port;
 				}

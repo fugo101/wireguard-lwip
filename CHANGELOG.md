@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.4](https://github.com/fugo101/wireguard-lwip/compare/v1.0.3...v1.0.4) (2026-11-10)
+
+
+### Bug Fixes
+
+* accept an inner packet only if its source routes back to the sender (GHSA-335q-jvfv-r737) ([b00499a](https://github.com/fugo101/wireguard-lwip/commit/b00499aff0b6b4f6ac7ad9bbc6ddb8e6fcebeddf))
+* check replay before endpoint roaming and guard short inner packets (GHSA-mqvf-8p8p-wjqg) ([b00499a](https://github.com/fugo101/wireguard-lwip/commit/b00499aff0b6b4f6ac7ad9bbc6ddb8e6fcebeddf))
+* keep a DERP peer on DERP when its session state is reset ([b00499a](https://github.com/fugo101/wireguard-lwip/commit/b00499aff0b6b4f6ac7ad9bbc6ddb8e6fcebeddf))
+* merge upstream security fixes (GHSA-7grw-r329-8g8c) ([b00499a](https://github.com/fugo101/wireguard-lwip/commit/b00499aff0b6b4f6ac7ad9bbc6ddb8e6fcebeddf))
+* route each packet to its longest-prefix peer (GHSA-xr9h-pc9x-m684) ([b00499a](https://github.com/fugo101/wireguard-lwip/commit/b00499aff0b6b4f6ac7ad9bbc6ddb8e6fcebeddf))
+
+
+### Documentation
+
+* add CLAUDE.md and agent skills config ([#20](https://github.com/fugo101/wireguard-lwip/issues/20)) ([36e07dc](https://github.com/fugo101/wireguard-lwip/commit/36e07dc4cb5fbd07e3231e4ba364289f652d71d9))
+
 ## [1.0.3](https://github.com/fugo101/wireguard-lwip/compare/v1.0.2...v1.0.3) (2026-08-19)
 
 

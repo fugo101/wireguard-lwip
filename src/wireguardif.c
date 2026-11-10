@@ -705,7 +705,13 @@ static void wireguardif_send_handshake_cookie(struct wireguard_device *device, c
 	struct pbuf *pbuf = NULL;
 	err_t err = ERR_OK;
 	uint8_t source_buf[18];
-	size_t source_len = get_source_addr_port(addr, port, source_buf, sizeof(source_buf));
+	size_t source_len;
+
+	// A DERP-injected packet has no real source (0.0.0.0): there is nowhere to send the reply
+	if (ip_addr_isany(addr)) {
+		return;
+	}
+	source_len = get_source_addr_port(addr, port, source_buf, sizeof(source_buf));
 
 	wireguard_create_cookie_reply(device, &packet, mac1, index, source_buf, source_len);
 

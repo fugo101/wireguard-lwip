@@ -56,7 +56,16 @@
 #if WG_DEBUG_LOGGING
 #define WG_DEBUG(...) do { printf(__VA_ARGS__); fflush(stdout); } while(0)
 #else
-#define WG_DEBUG(...) do {} while(0)
+// Compiled out, but the arguments stay referenced (no unused-variable warnings for debug-only values) and type-checked
+#define WG_DEBUG(...) do { if (0) { printf(__VA_ARGS__); } } while(0)
+#endif
+
+// Real errors, always on and at error level. The format has no trailing newline
+#ifdef ESP_PLATFORM
+#include "esp_log.h"
+#define WG_ERROR(...) ESP_LOGE("wireguardif", __VA_ARGS__)
+#else
+#define WG_ERROR(...) do { printf(__VA_ARGS__); printf("\n"); } while(0)
 #endif
 
 #define WIREGUARDIF_TIMER_MSECS 400
@@ -394,7 +403,7 @@ static void wireguardif_process_response_message(struct wireguard_device *device
 	if (wireguard_process_handshake_response(device, peer, response)) {
 		// Packet is good — identify the peer
 		uint8_t wg_idx = wireguard_peer_index(device, peer);
-		printf("[WG] *** HANDSHAKE COMPLETE! wg_idx=%u key=%02x%02x%02x%02x "
+		WG_DEBUG("[WG] *** HANDSHAKE COMPLETE! wg_idx=%u key=%02x%02x%02x%02x "
 		       "from=%s:%u ***\n",
 		       wg_idx,
 		       peer->public_key[0], peer->public_key[1],
@@ -404,7 +413,7 @@ static void wireguardif_process_response_message(struct wireguard_device *device
 		update_peer_addr(peer, addr, port);
 
 		wireguard_start_session(peer, true);
-		printf("[WG] Session started, sending keepalive to %s:%u\n",
+		WG_DEBUG("[WG] Session started, sending keepalive to %s:%u\n",
 		       ip_addr_isany(&peer->ip) ? "DERP" : ipaddr_ntoa(&peer->ip), peer->port);
 		wireguardif_send_keepalive(device, peer);
 
@@ -412,10 +421,10 @@ static void wireguardif_process_response_message(struct wireguard_device *device
 		if (!netif_is_link_up(device->netif)) {
 			device->netif->state = NULL; netif_set_link_up(device->netif); device->netif->state = device;
 		}
-		printf("[WG] *** WIREGUARD SESSION ESTABLISHED wg_idx=%u ***\n", wg_idx);
+		WG_DEBUG("[WG] *** WIREGUARD SESSION ESTABLISHED wg_idx=%u ***\n", wg_idx);
 	} else {
 		// Packet bad
-		printf("[WG] Handshake response INVALID (crypto failed)\n");
+		WG_ERROR("[WG] Handshake response INVALID (crypto failed)");
 	}
 }
 
@@ -806,8 +815,8 @@ void wireguardif_network_rx(void *arg, struct udp_pcb *pcb, struct pbuf *p, cons
 
 	uint8_t type = wireguard_get_message_type(data, len);
 
-	// Always log incoming WG packets (critical for debugging handshake issues)
-	printf("[WG_RX] type=%d (%s) len=%u from %s:%u\n",
+	// Log incoming WG packets (useful when debugging handshake issues)
+	WG_DEBUG("[WG_RX] type=%d (%s) len=%u from %s:%u\n",
 		type,
 		type == 1 ? "INIT" : type == 2 ? "RESP" : type == 3 ? "COOKIE" : type == 4 ? "DATA" : "?",
 		(unsigned)len,
@@ -816,16 +825,16 @@ void wireguardif_network_rx(void *arg, struct udp_pcb *pcb, struct pbuf *p, cons
 	switch (type) {
 		case MESSAGE_HANDSHAKE_INITIATION:
 			msg_initiation = (struct message_handshake_initiation *)data;
-			printf("[WG_RX] Handshake INITIATION from peer, sender_idx=%lu\n",
+			WG_DEBUG("[WG_RX] Handshake INITIATION from peer, sender_idx=%lu\n",
 				(unsigned long)msg_initiation->sender);
 
 			// Check mac1 (and optionally mac2) are correct - note it may internally generate a cookie reply packet
 			if (wireguardif_check_initiation_message(device, msg_initiation, addr, port)) {
-				printf("[WG_RX] Initiation MAC check PASSED\n");
+				WG_DEBUG("[WG_RX] Initiation MAC check PASSED\n");
 
 				peer = wireguard_process_initiation_message(device, msg_initiation);
 				if (peer) {
-					printf("[WG_RX] Initiation processed OK, sending response\n");
+					WG_DEBUG("[WG_RX] Initiation processed OK, sending response\n");
 					// Update the peer location
 					update_peer_addr(peer, addr, port);
 
@@ -840,7 +849,7 @@ void wireguardif_network_rx(void *arg, struct udp_pcb *pcb, struct pbuf *p, cons
 						saved_port = peer->port;
 						ip_addr_set_any(false, &peer->ip);
 						peer->port = 0;
-						printf("[WG_RX] Sending response via DERP (initiation was relayed)\n");
+						WG_DEBUG("[WG_RX] Sending response via DERP (initiation was relayed)\n");
 					}
 
 					// Send back a handshake response
@@ -858,32 +867,33 @@ void wireguardif_network_rx(void *arg, struct udp_pcb *pcb, struct pbuf *p, cons
 						peer->remote_initiation_accepted(device->netif, wireguard_peer_index(device, peer));
 					}
 				} else {
-					printf("[WG_RX] Initiation process FAILED (bad keys/timestamp?)\n");
+					// Routine for a duplicate or replayed initiation (timestamp not newer, or flood limit), so debug only
+					WG_DEBUG("[WG_RX] Initiation process FAILED (bad keys/timestamp?)\n");
 				}
 			} else {
-				printf("[WG_RX] Initiation MAC check FAILED\n");
+				WG_DEBUG("[WG_RX] Initiation MAC check FAILED\n");
 			}
 			break;
 
 		case MESSAGE_HANDSHAKE_RESPONSE:
 			msg_response = (struct message_handshake_response *)data;
-			printf("[WG_RX] Handshake RESPONSE! receiver_idx=%lu sender_idx=%lu\n",
+			WG_DEBUG("[WG_RX] Handshake RESPONSE! receiver_idx=%lu sender_idx=%lu\n",
 				(unsigned long)msg_response->receiver, (unsigned long)msg_response->sender);
 
 			// Check mac1 (and optionally mac2) are correct - note it may internally generate a cookie reply packet
 			if (wireguardif_check_response_message(device, msg_response, addr, port)) {
-				printf("[WG_RX] Response MAC check PASSED\n");
+				WG_DEBUG("[WG_RX] Response MAC check PASSED\n");
 
 				peer = peer_lookup_by_handshake(device, msg_response->receiver);
 				if (peer) {
-					printf("[WG_RX] Peer found for handshake, processing response\n");
+					WG_DEBUG("[WG_RX] Peer found for handshake, processing response\n");
 					// Process the handshake response
 					wireguardif_process_response_message(device, peer, msg_response, addr, port);
 				} else {
-					printf("[WG_RX] ERROR: No peer found for receiver_idx=%lu\n", (unsigned long)msg_response->receiver);
+					WG_DEBUG("[WG_RX] ERROR: No peer found for receiver_idx=%lu\n", (unsigned long)msg_response->receiver);
 				}
 			} else {
-				printf("[WG_RX] Response MAC check FAILED\n");
+				WG_DEBUG("[WG_RX] Response MAC check FAILED\n");
 			}
 			break;
 
@@ -932,7 +942,7 @@ static err_t wireguard_start_handshake(struct netif *netif, struct wireguard_pee
 	pbuf = wireguardif_initiate_handshake(device, peer, &msg, &result);
 	if (pbuf) {
 		result = wireguardif_peer_output(netif, pbuf, peer);
-		printf("[WG_TX] Handshake init sent, result=%d, sender_idx=%lu, to %s:%u\n",
+		WG_DEBUG("[WG_TX] Handshake init sent, result=%d, sender_idx=%lu, to %s:%u\n",
 			result, (unsigned long)msg.sender,
 			ip_addr_isany(&peer->ip) ? "DERP" : ipaddr_ntoa(&peer->ip), peer->port);
 		pbuf_free(pbuf);
@@ -941,7 +951,12 @@ static err_t wireguard_start_handshake(struct netif *netif, struct wireguard_pee
 		memcpy(peer->handshake_mac1, msg.mac1, WIREGUARD_COOKIE_LEN);
 		peer->handshake_mac1_valid = true;
 	} else {
-		printf("[WG_TX] FAILED to create handshake initiation, result=%d\n", result);
+		// last_initiation_tx is not updated, so the timer retries this every tick: log it at most once per REKEY_TIMEOUT
+		static uint32_t s_init_fail_log_millis = 0;
+		if ((s_init_fail_log_millis == 0) || wireguard_expired(s_init_fail_log_millis, REKEY_TIMEOUT)) {
+			WG_ERROR("[WG_TX] FAILED to create handshake initiation, result=%d", result);
+			s_init_fail_log_millis = wireguard_sys_now();
+		}
 	}
 	return result;
 }
@@ -1126,7 +1141,7 @@ err_t wireguardif_add_peer(struct netif *netif, struct wireguardif_peer *p, u8_t
 	}
 
 	uint32_t t2 = wireguard_sys_now();
-	WG_DEBUG("Adding peer took %ldms\r\n", (t2-t1));
+	WG_DEBUG("Adding peer took %lums\r\n", (unsigned long)(t2-t1));
 
 	if (peer_index) {
 		if (peer) {
@@ -1305,7 +1320,7 @@ void wireguardif_periodic(struct netif *netif) {
 			}
 			if (should_send_initiation(peer)) {
 				if (handshakes_this_tick < MAX_HANDSHAKES_PER_TICK) {
-					printf("[WG_PERIODIC] Handshake retry wg_idx=%d key=%02x%02x%02x%02x "
+					WG_DEBUG("[WG_PERIODIC] Handshake retry wg_idx=%d key=%02x%02x%02x%02x "
 					       "ip=%s:%u connect_ip=%s:%u active=%d send_hs=%d\n",
 					       peer_idx,
 					       peer->public_key[0], peer->public_key[1],
@@ -1366,7 +1381,7 @@ err_t wireguardif_init(struct netif *netif) {
 					uint32_t t1 = wireguard_sys_now();
 					if (wireguard_device_init(device, private_key)) {
 						uint32_t t2 = wireguard_sys_now();
-						WG_DEBUG("Device init took %ldms\r\n", (t2-t1));
+						WG_DEBUG("Device init took %lums\r\n", (unsigned long)(t2-t1));
 
 #if LWIP_CHECKSUM_CTRL_PER_NETIF
 						NETIF_SET_CHECKSUM_CTRL(netif, NETIF_CHECKSUM_ENABLE_ALL);
@@ -1414,7 +1429,7 @@ err_t wireguardif_init(struct netif *netif) {
 							uint32_t t1 = wireguard_sys_now();
 							if (wireguard_device_init(device, private_key)) {
 								uint32_t t2 = wireguard_sys_now();
-								WG_DEBUG("Device init took %ldms\r\n", (t2-t1));
+								WG_DEBUG("Device init took %lums\r\n", (unsigned long)(t2-t1));
 
 #if LWIP_CHECKSUM_CTRL_PER_NETIF
 								NETIF_SET_CHECKSUM_CTRL(netif, NETIF_CHECKSUM_ENABLE_ALL);
@@ -1507,7 +1522,7 @@ void wireguardif_force_derp_output(struct netif *netif, bool force) {
 	struct wireguard_device *device = (struct wireguard_device *)netif->state;
 	if (device->valid) {
 		device->force_derp_output = force;
-		printf("[WG] force_derp_output=%d\n", force);
+		WG_DEBUG("[WG] force_derp_output=%d\n", force);
 	}
 }
 

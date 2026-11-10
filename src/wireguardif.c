@@ -968,6 +968,8 @@ err_t wireguardif_connect(struct netif *netif, u8_t peer_index) {
 			peer->active = true;
 			peer->ip = peer->connect_ip;
 			peer->port = peer->connect_port;
+			// A direct endpoint: stop routing through DERP until a packet arrives over it again
+			peer->last_rx_via_derp = false;
 			// Force immediate handshake to the new endpoint
 			peer->send_handshake = true;
 			peer->last_initiation_tx = 0;
@@ -1088,6 +1090,7 @@ err_t wireguardif_add_peer(struct netif *netif, struct wireguardif_peer *p, u8_t
 					peer->connect_port = p->endport_port;
 					peer->ip = peer->connect_ip;
 					peer->port = peer->connect_port;
+					peer->last_rx_via_derp = false;
 					if (p->keep_alive == WIREGUARDIF_KEEPALIVE_DEFAULT) {
 						peer->keepalive_interval = KEEPALIVE_TIMEOUT;
 					} else {
@@ -1200,10 +1203,13 @@ static void wireguardif_tmr(void *arg) {
 				peer->last_session_millis = 0;
 
 				// Revert back to the configured IP/port if these were altered - if there is no configured endpoint keep the learned one.
-				// A peer moved to DERP (wireguardif_connect_derp clears ip) stays on DERP: connect_ip may be a dead direct path
+				// A peer moved to DERP (wireguardif_connect_derp clears ip) stays on DERP: connect_ip may be a dead direct path.
+				// Restoring connect_ip sets a direct endpoint, so retries go there even if the last packet came over DERP.
+				// A kept learned endpoint keeps the DERP flag too: it may be just as stale
 				if (!ip_addr_isany(&peer->connect_ip) && (peer->connect_port != 0) && !ip_addr_isany(&peer->ip)) {
 					peer->ip = peer->connect_ip;
 					peer->port = peer->connect_port;
+					peer->last_rx_via_derp = false;
 				}
 			}
 			// Destroy any keypairs that can no longer be used to send or receive
@@ -1273,6 +1279,7 @@ void wireguardif_periodic(struct netif *netif) {
 				if (!ip_addr_isany(&peer->connect_ip) && (peer->connect_port != 0) && !ip_addr_isany(&peer->ip)) {
 					peer->ip = peer->connect_ip;
 					peer->port = peer->connect_port;
+					peer->last_rx_via_derp = false;
 				}
 			}
 			if (should_destroy_keypair(&peer->curr_keypair)) {

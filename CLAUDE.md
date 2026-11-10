@@ -10,8 +10,9 @@ registers as an lwIP `netif`. The fork adds DERP relay + magicsock integration,
 16-peer support, ESP-IDF 6.x/GCC 15 compat, and lwIP thread-safety fixes. It is
 consumed by `fugo101/microlink`.
 
-There is no standalone build or test suite here — the component is compiled by the
-ESP-IDF build of a consuming project. Validation in this repo is manifest/packaging only.
+There is no standalone firmware build here — the component is compiled by the ESP-IDF
+build of a consuming project. `test/host/` holds host tests that compile the real
+`wireguardif.c` against small lwIP/platform doubles.
 
 ## Commands
 
@@ -19,9 +20,10 @@ ESP-IDF build of a consuming project. Validation in this repo is manifest/packag
 pip install idf-component-manager          # 3.x; the 2.5.0 bundled with IDF 6.0.1 lacks `manifest lint`
 compote manifest lint idf_component.yml    # validate the component manifest
 compote -W component pack --project-dir . --name wireguard_lwip   # same validation the registry runs on upload
+OUT=<scratch dir> sh test/host/build.sh   # host tests, IPv4-only and dual-stack; needs $IDF_PATH (lwIP headers); ends "result: pass"
 ```
 
-Both are what CI runs (`.github/workflows/ci.yml`). To compile-check real changes,
+The two `compote` commands are what CI runs (`.github/workflows/ci.yml`); CI does not run the host tests, so run them locally. To compile-check real changes,
 build a consuming ESP-IDF project against a local override of this component.
 
 ## Release / publish

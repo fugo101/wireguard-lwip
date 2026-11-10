@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT. Host test for cryptokey routing with several peers: on transmit, a packet goes to the
- * peer whose allowed IP is the longest prefix match, whatever its session state. It #includes the component's own
+ * peer whose allowed IP is the longest prefix match, whatever its session state; on receive, the inner source must
+ * route back to the peer that sent it, and inner IPv6 is dropped. It #includes the component's own
  * wireguardif.c and uses its real handshake, AEAD, transmit and receive paths; lwIP and time are small doubles.
  * Build: see build.sh. Each "BUG:" line states what must NOT happen; controls must pass either way. */
 #include "wireguardif.c"
@@ -63,6 +64,25 @@ static uint32_t tx(struct netif *wg, uint32_t dst, err_t *err) {
     return sent ? host_of(&last_dst) : 0;
 }
 
+/* Server s sends one transport data packet carrying inner (len bytes) to the device; return whether it reached IP. */
+static bool from_server(struct wireguard_device *a, struct server *s, const uint8_t *inner, size_t len) {
+    uint8_t wire[16 + 64 + 16];
+    assert(len <= 64);
+    struct message_transport_data *h = (struct message_transport_data *)wire;
+    memset(wire, 0, 16); h->type = MESSAGE_TRANSPORT_DATA; h->receiver = s->peer->curr_keypair.remote_index;
+    U64TO8_LITTLE(h->counter, s->peer->curr_keypair.sending_counter);
+    wireguard_encrypt_packet(&h->enc_packet[0], inner, len, &s->peer->curr_keypair);
+    unsigned before = delivered;
+    rx(a, wire, 16 + len + 16, s->endpoint, 51820);
+    return delivered == before + 1;
+}
+static bool from_server_v4(struct wireguard_device *a, struct server *s, uint32_t src, uint32_t dst) {
+    uint8_t inner[28] = {0x45, 0, 0, 28, 0, 0, 0, 0, 64, 17};
+    inner[12] = src >> 24; inner[13] = (src >> 16) & 255; inner[14] = (src >> 8) & 255; inner[15] = src & 255;
+    inner[16] = dst >> 24; inner[17] = (dst >> 16) & 255; inner[18] = (dst >> 8) & 255; inner[19] = dst & 255;
+    return from_server(a, s, inner, sizeof(inner));
+}
+
 int main(void) {
     wireguard_init();
     struct netif wg = {0};
@@ -107,6 +127,23 @@ int main(void) {
     EXPECT(tx(&wg, IN_B, &err) != EP_C, "BUG: after B's session ended, its traffic fell back to the exit node");
     EXPECT(tx(&wg, IN_D, &err) != EP_C, "BUG: a packet for D (never connected) was encrypted to the exit node");
 
+    puts("== 3. receive: the inner source must route back to the peer that sent it");
+    clock_ms += 1000;   /* B saw an initiation in section 2: stay outside its per-second initiation limit */
+    establish(&wg, a, &b); establish(&wg, a, &d);
+    EXPECT(from_server_v4(a, &b, IN_B, IN_A), "control: B sending as its own address is accepted");
+    EXPECT(from_server_v4(a, &c, IN_X, IN_A), "control: the exit node sending as an address only it covers is accepted");
+    EXPECT(!from_server_v4(a, &b, IN_D, IN_A), "control: B sending as D's address is dropped (outside B's allowed IPs)");
+    EXPECT(!from_server_v4(a, &c, IN_D, IN_A), "BUG: the exit node (0.0.0.0/0) sent as D's address and was accepted");
+    EXPECT(!from_server_v4(a, &c, IN_B, IN_A), "BUG: the exit node (0.0.0.0/0) sent as B's address and was accepted");
+
+    puts("== 4. receive: inner IPv6 has no allowed-IP check, so it is dropped");
+    {
+        uint8_t v6[48] = {0x60, 0, 0, 0, 0, 8, 17, 64};   /* version 6, payload length 8, UDP, hop limit 64 */
+        v6[8] = 0xfd; v6[23] = 2; v6[24] = 0xfd; v6[39] = 1; /* fd00::2 -> fd00::1 */
+        EXPECT(!from_server(a, &c, v6, sizeof(v6)), "BUG: an inner IPv6 packet from the exit node reached IP unfiltered");
+        EXPECT(!from_server(a, &b, v6, sizeof(v6)), "BUG: an inner IPv6 packet from B reached IP unfiltered");
+    }
+
     puts("== 5. two peers with the same prefix: the last one added owns it");
     add_server(&wg, a, &e, IN_B, 0xffffffffu, EP_E);
     bool b_holds = false;
@@ -114,6 +151,8 @@ int main(void) {
     EXPECT(!b_holds, "adding E with B's /32 removes it from B");
     clock_ms += 1000; establish(&wg, a, &e);
     EXPECT(tx(&wg, IN_B, &err) == EP_E, "BUG: traffic for the shared /32 went to the older peer B");
+    EXPECT(from_server_v4(a, &e, IN_B, IN_A), "the new owner E sending as the shared /32 is accepted");
+    EXPECT(!from_server_v4(a, &b, IN_B, IN_A), "the old peer B sending as the shared /32 is dropped");
 
     wireguardif_shutdown(&wg); free(a); wg.state = NULL;
     printf("Allowed-IP routing test: %u checks, %u failures\n", checks, failures);

@@ -1,6 +1,6 @@
 .idea/
-test/host/test_rx_replay
-test/host/test_allowed_ips
+test/host/test_*.ipv4
+test/host/test_*.dual
 test/host/*.dSYM/
 test/host/*.log
 test/host/*.asan.txt

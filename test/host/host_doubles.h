@@ -51,6 +51,11 @@ err_t udp_bind(struct udp_pcb *p, const ip_addr_t *a, u16_t port) { (void)p; (vo
 void udp_bind_netif(struct udp_pcb *p, const struct netif *n) { (void)p; (void)n; }
 void udp_recv(struct udp_pcb *p, udp_recv_fn f, void *a) { (void)p; (void)f; (void)a; }
 void udp_remove(struct udp_pcb *p) { (void)p; }
+#if LWIP_IPV4 && LWIP_IPV6
+/* Dual stack: ipaddr_ntoa() lives in core/ip.c and ip6_addr.c wants netif_find(); neither is built here. */
+char *ipaddr_ntoa(const ip_addr_t *a) { return IP_IS_V6(a) ? ip6addr_ntoa(ip_2_ip6(a)) : ip4addr_ntoa(ip_2_ip4(a)); }
+struct netif *netif_find(const char *name) { (void)name; return NULL; }
+#endif
 
 static unsigned delivered, sent;
 static ip_addr_t last_dst; static u16_t last_port;

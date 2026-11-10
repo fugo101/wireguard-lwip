@@ -474,7 +474,6 @@ static void wireguardif_process_data_message(struct wireguard_device *device, st
 	struct ip_hdr *iphdr;
 	ip_addr_t dest;
 	bool dest_ok = false;
-	int x;
 	uint32_t now;
 	uint16_t header_len = 0xFFFF;
 	uint32_t idx = data_hdr->receiver;
@@ -550,29 +549,23 @@ static void wireguardif_process_data_message(struct wireguard_device *device, st
 							       ip4_addr3_16(ip_2_ip4(&dest)),
 							       ip4_addr4_16(ip_2_ip4(&dest)),
 							       (unsigned)pbuf->tot_len);
-							// Check if SOURCE IP matches this peer's allowed IPs
-							for (x=0; x < WIREGUARD_MAX_SRC_IPS; x++) {
-								if (peer->allowed_source_ips[x].valid) {
-									if (IP_ADDR_NETCMP_COMPAT(&src_ip, &peer->allowed_source_ips[x].ip, &peer->allowed_source_ips[x].mask)) {
-										dest_ok = true;
-										header_len = PP_NTOHS(IPH_LEN(iphdr));
-										WG_DEBUG("[WG_RX_IP] Allowed by rule %d (src matches), header_len=%u\n", x, (unsigned)header_len);
-										break;
-									}
-								}
-							}
-							if (!dest_ok) {
-								WG_DEBUG("[WG_RX_IP] DROPPED: src IP not in peer's allowed_source_ips\n");
+							// The source must route back to this very peer: the longest prefix match in the whole table, the same
+							// lookup as on transmit. Being inside the peer's own allowed IPs is not enough, or a peer holding a
+							// wide route (e.g. 0.0.0.0/0) could send as any other peer's address.
+							if (peer_lookup_by_allowed_ip(device, &src_ip) == peer) {
+								dest_ok = true;
+								header_len = PP_NTOHS(IPH_LEN(iphdr));
+								WG_DEBUG("[WG_RX_IP] Allowed (src routes to this peer), header_len=%u\n", (unsigned)header_len);
+							} else {
+								WG_DEBUG("[WG_RX_IP] DROPPED: src IP does not route to this peer\n");
 							}
 						}
 #endif /* LWIP_IPV4 */
-#if LWIP_IPV6
-						if ((pbuf->tot_len >= IP6_HLEN) && (IPH_V(iphdr) == 6)) {
-							// TODO: IPV6 support for route filtering
-							header_len = PP_NTOHS(IPH_LEN(iphdr));
-							dest_ok = true;
+						// Inner IPv6 packets are dropped: the allowed-IP table holds IPv4 prefixes only, so their source cannot be
+						// checked against it.
+						if (IPH_V(iphdr) == 6) {
+							WG_DEBUG("[WG_RX_IP] DROPPED: inner IPv6 is not supported\n");
 						}
-#endif /* LWIP_IPV6 */
 						if (header_len <= pbuf->tot_len) {
 
 							// 5. If the plaintext packet has not been dropped, it is inserted into the receive queue of the wg0 interface.

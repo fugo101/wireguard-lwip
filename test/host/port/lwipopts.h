@@ -7,7 +7,9 @@
 #define LWIP_SOCKET 0
 #define ESP_LWIP 1
 #define LWIP_IPV4 1
-#define LWIP_IPV6 0
+#ifndef LWIP_IPV6
+#define LWIP_IPV6 0   /* build.sh also builds a dual-stack variant with -DLWIP_IPV6=1, as ESP-IDF does */
+#endif
 #define IP_FORWARD 1
 #define IP_NAPT 1
 #define IP_NAPT_PORTMAP 0

@@ -475,7 +475,7 @@ static void wireguardif_process_data_message(struct wireguard_device *device, st
 	ip_addr_t dest;
 	bool dest_ok = false;
 	uint32_t now;
-	uint16_t header_len = 0xFFFF;
+	uint32_t header_len = UINT32_MAX;
 	uint32_t idx = data_hdr->receiver;
 
 	keypair = get_peer_keypair_for_idx(peer, idx);
@@ -483,17 +483,20 @@ static void wireguardif_process_data_message(struct wireguard_device *device, st
 	if (keypair) {
 		if (
 				(keypair->receiving_valid) &&
-				!wireguard_expired(keypair->keypair_millis, REJECT_AFTER_TIME) &&
-				(keypair->sending_counter < REJECT_AFTER_MESSAGES)
-
+				!wireguard_expired(keypair->keypair_millis, REJECT_AFTER_TIME)
 		) {
 
 			nonce = U8TO64_LITTLE(data_hdr->counter);
 			src = &data_hdr->enc_packet[0];
 			src_len = data_len;
 
-			// We don't know the unpadded size until we have decrypted the packet and validated/inspected the IP header
-			pbuf = pbuf_alloc(PBUF_TRANSPORT, src_len - WIREGUARD_AUTHTAG_LEN, PBUF_RAM);
+			pbuf = NULL;
+			// 6.2 Refuse to receive any more transport data messages after Reject-After-Messages
+			// The counter has not been authenticated yet so only drop this packet, don't destroy the keypair
+			if (nonce < REJECT_AFTER_MESSAGES) {
+				// We don't know the unpadded size until we have decrypted the packet and validated/inspected the IP header
+				pbuf = pbuf_alloc(PBUF_TRANSPORT, src_len - WIREGUARD_AUTHTAG_LEN, PBUF_RAM);
+			}
 			if (pbuf) {
 				// Decrypt the packet
 				memset(pbuf->payload, 0, pbuf->tot_len);
@@ -603,9 +606,9 @@ static void wireguardif_process_data_message(struct wireguard_device *device, st
 
 
 		} else {
-			//After Reject-After-Messages transport data messages or after the current secure session is Reject- After-Time seconds old,
-			// whichever comes first, WireGuard will refuse to send or receive any more transport data messages using the current secure session,
-			// until a new secure session is created through the 1-RTT handshake
+			// After the current secure session is Reject-After-Time seconds old WireGuard will refuse to send or receive any more transport data
+			// messages using the current secure session, until a new secure session is created through the 1-RTT handshake
+			// Note: Reject-After-Messages is checked above against the received counter, which only drops the packet as it is not yet authenticated
 			keypair_destroy(keypair);
 		}
 
@@ -838,6 +841,12 @@ void wireguardif_network_rx(void *arg, struct udp_pcb *pcb, struct pbuf *p, cons
 						peer->ip = saved_ip;
 						peer->port = saved_port;
 					}
+
+					// 5.1 The initiation was accepted so the peer's greatest timestamp has increased - let the application persist it
+					// Called after the response has been sent so a slow callback doesn't delay the handshake. peer must not be used after this
+					if (peer->remote_initiation_accepted) {
+						peer->remote_initiation_accepted(device->netif, wireguard_peer_index(device, peer));
+					}
 				} else {
 					printf("[WG_RX] Initiation process FAILED (bad keys/timestamp?)\n");
 				}
@@ -1004,6 +1013,18 @@ err_t wireguardif_peer_is_up(struct netif *netif, u8_t peer_index, ip_addr_t *cu
 	return result;
 }
 
+err_t wireguardif_peer_greatest_timestamp(struct netif *netif, u8_t peer_index, uint8_t *timestamp, size_t max_len) {
+	struct wireguard_peer *peer;
+	err_t result = ERR_ARG;
+	if (timestamp && (max_len >= WIREGUARD_TAI64N_LEN)) {
+		result = wireguardif_lookup_peer(netif, peer_index, &peer);
+		if (result == ERR_OK) {
+			memcpy(timestamp, peer->greatest_timestamp, WIREGUARD_TAI64N_LEN);
+		}
+	}
+	return result;
+}
+
 err_t wireguardif_remove_peer(struct netif *netif, u8_t peer_index) {
 	struct wireguard_peer *peer;
 	err_t result = wireguardif_lookup_peer(netif, peer_index, &peer);
@@ -1075,6 +1096,7 @@ err_t wireguardif_add_peer(struct netif *netif, struct wireguardif_peer *p, u8_t
 						device_remove_ip_from_others(device, peer, &p->allowed_ip, &p->allowed_mask);
 					}
 					memcpy(peer->greatest_timestamp, p->greatest_timestamp, sizeof(peer->greatest_timestamp));
+					peer->remote_initiation_accepted = p->remote_initiation_accepted;
 
 					result = ERR_OK;
 				} else {
@@ -1129,11 +1151,11 @@ static bool should_send_keepalive(struct wireguard_peer *peer) {
 	return result;
 }
 
-static bool should_destroy_current_keypair(struct wireguard_peer *peer) {
+static bool should_destroy_keypair(struct wireguard_keypair *keypair) {
 	bool result = false;
-	if (peer->curr_keypair.valid &&
-			(wireguard_expired(peer->curr_keypair.keypair_millis, REJECT_AFTER_TIME) ||
-			(peer->curr_keypair.sending_counter >= REJECT_AFTER_MESSAGES))
+	if (keypair->valid &&
+			(wireguard_expired(keypair->keypair_millis, REJECT_AFTER_TIME) ||
+			(keypair->sending_counter >= REJECT_AFTER_MESSAGES))
 		) {
 		result = true;
 	}
@@ -1142,7 +1164,9 @@ static bool should_destroy_current_keypair(struct wireguard_peer *peer) {
 
 static bool should_reset_peer(struct wireguard_peer *peer) {
 	bool result = false;
-	if (peer->curr_keypair.valid && (wireguard_expired(peer->curr_keypair.keypair_millis, REJECT_AFTER_TIME * 3))) {
+	// 6.3 If no new secure session is created after (Reject-After-Time * 3) seconds, the current secure session, the previous secure session,
+	// and potentially the next secure session are discarded and zeroed out, in addition to any possible partially-completed handshake states and ephemeral keys
+	if ((peer->last_session_millis != 0) && wireguard_expired(peer->last_session_millis, REJECT_AFTER_TIME * 3)) {
 		result = true;
 	}
 	return result;
@@ -1170,15 +1194,25 @@ static void wireguardif_tmr(void *arg) {
 				keypair_destroy(&peer->next_keypair);
 				keypair_destroy(&peer->curr_keypair);
 				keypair_destroy(&peer->prev_keypair);
-				// TODO: Also destroy handshake?
+				crypto_zero(&peer->handshake, sizeof(struct wireguard_handshake));
+				peer->handshake.valid = false;
+				peer->last_session_millis = 0;
 
-				// Revert back to default IP/port if these were altered
-				peer->ip = peer->connect_ip;
-				peer->port = peer->connect_port;
+				// Revert back to the configured IP/port if these were altered - if there is no configured endpoint keep the learned one
+				if (!ip_addr_isany(&peer->connect_ip) && (peer->connect_port != 0)) {
+					peer->ip = peer->connect_ip;
+					peer->port = peer->connect_port;
+				}
 			}
-			if (should_destroy_current_keypair(peer)) {
-				// Destroy current keypair
+			// Destroy any keypairs that can no longer be used to send or receive
+			if (should_destroy_keypair(&peer->curr_keypair)) {
 				keypair_destroy(&peer->curr_keypair);
+			}
+			if (should_destroy_keypair(&peer->prev_keypair)) {
+				keypair_destroy(&peer->prev_keypair);
+			}
+			if (should_destroy_keypair(&peer->next_keypair)) {
+				keypair_destroy(&peer->next_keypair);
 			}
 			if (should_send_keepalive(peer)) {
 				wireguardif_send_keepalive(device, peer);
@@ -1231,11 +1265,22 @@ void wireguardif_periodic(struct netif *netif) {
 				keypair_destroy(&peer->next_keypair);
 				keypair_destroy(&peer->curr_keypair);
 				keypair_destroy(&peer->prev_keypair);
-				peer->ip = peer->connect_ip;
-				peer->port = peer->connect_port;
+				crypto_zero(&peer->handshake, sizeof(struct wireguard_handshake));
+				peer->handshake.valid = false;
+				peer->last_session_millis = 0;
+				if (!ip_addr_isany(&peer->connect_ip) && (peer->connect_port != 0)) {
+					peer->ip = peer->connect_ip;
+					peer->port = peer->connect_port;
+				}
 			}
-			if (should_destroy_current_keypair(peer)) {
+			if (should_destroy_keypair(&peer->curr_keypair)) {
 				keypair_destroy(&peer->curr_keypair);
+			}
+			if (should_destroy_keypair(&peer->prev_keypair)) {
+				keypair_destroy(&peer->prev_keypair);
+			}
+			if (should_destroy_keypair(&peer->next_keypair)) {
+				keypair_destroy(&peer->next_keypair);
 			}
 			if (should_send_keepalive(peer)) {
 				wireguardif_send_keepalive(device, peer);
@@ -1397,6 +1442,9 @@ err_t wireguardif_init(struct netif *netif) {
 	} else {
 		result = ERR_ARG;
 	}
+
+	// Wipe the decoded private key - a copy is kept in the device structure
+	crypto_zero(private_key, sizeof(private_key));
 	return result;
 }
 

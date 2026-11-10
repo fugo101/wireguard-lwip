@@ -23,3 +23,5 @@ files:
     # registry archive.
     - "src/crypto/cortex/**/*"
     - "example/**/*"
+    # Host-only test (clang + lwIP sources), not part of the component build.
+    - "test/**/*"

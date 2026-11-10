@@ -1,1 +1,5 @@
 .idea/
+test/host/test_rx_replay
+test/host/test_rx_replay.dSYM/
+test/host/*.log
+test/host/*.asan.txt

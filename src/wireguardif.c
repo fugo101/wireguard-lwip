@@ -488,7 +488,11 @@ static void wireguardif_process_data_message(struct wireguard_device *device, st
 				bool decrypt_ok = wireguard_decrypt_packet(pbuf->payload, src, src_len, nonce, keypair);
 				WG_DEBUG("[WG_DECRYPT] result=%d, src_len=%u, nonce=%llu\n",
 				       decrypt_ok, (unsigned)src_len, (unsigned long long)nonce);
-				if (decrypt_ok) {
+				// Check for packet replay / dupes only AFTER the packet has authenticated (a forged packet must not move the
+				// window), and before it may change any state: endpoint, last_rx, keypair promotion. This covers every packet,
+				// including zero-length keepalives, so a captured packet resent from another address cannot redirect the peer.
+				// Same order as the Linux implementation (counter_validate() before the endpoint update).
+				if (decrypt_ok && wireguard_check_replay(keypair, nonce)) {
 
 					// 3. Since the packet has authenticated correctly, the source IP of the outer UDP/IP packet is used to update the endpoint for peer TrMv...WXX0.
 					// Update the peer location
@@ -512,80 +516,78 @@ static void wireguardif_process_data_message(struct wireguard_device *device, st
 					if (pbuf->tot_len > 0) {
 						//4a. Once the packet payload is decrypted, the interface has a plaintext packet. If this is not an IP packet, it is dropped.
 						iphdr = (struct ip_hdr *)pbuf->payload;
-						// Check for packet replay / dupes
-						if (wireguard_check_replay(keypair, nonce)) {
 
-							// 4b. Otherwise, WireGuard checks to see if the source IP address of the plaintext inner-packet routes correspondingly in the cryptokey routing table
-							// Also check packet length!
+						// 4b. Otherwise, WireGuard checks to see if the source IP address of the plaintext inner-packet routes correspondingly in the cryptokey routing table
+						// Also check packet length! An inner packet shorter than an IP header is not read as one.
 #if LWIP_IPV4
-							if (IPH_V(iphdr) == 4) {
-								// Check SOURCE IP (where packet came from) against peer's allowed IPs
-								// This is cryptokey routing: verify the inner packet source matches
-								// what this peer is allowed to send as.
-								ip_addr_t src_ip;
-								ip_addr_copy_from_ip4(src_ip, iphdr->src);
-								ip_addr_copy_from_ip4(dest, iphdr->dest);
-								WG_DEBUG("[WG_RX_IP] IPv4 src=%d.%d.%d.%d dest=%d.%d.%d.%d, tot_len=%u\n",
-								       ip4_addr1_16(ip_2_ip4(&src_ip)),
-								       ip4_addr2_16(ip_2_ip4(&src_ip)),
-								       ip4_addr3_16(ip_2_ip4(&src_ip)),
-								       ip4_addr4_16(ip_2_ip4(&src_ip)),
-								       ip4_addr1_16(ip_2_ip4(&dest)),
-								       ip4_addr2_16(ip_2_ip4(&dest)),
-								       ip4_addr3_16(ip_2_ip4(&dest)),
-								       ip4_addr4_16(ip_2_ip4(&dest)),
-								       (unsigned)pbuf->tot_len);
-								// Check if SOURCE IP matches this peer's allowed IPs
-								for (x=0; x < WIREGUARD_MAX_SRC_IPS; x++) {
-									if (peer->allowed_source_ips[x].valid) {
-										if (IP_ADDR_NETCMP_COMPAT(&src_ip, &peer->allowed_source_ips[x].ip, &peer->allowed_source_ips[x].mask)) {
-											dest_ok = true;
-											header_len = PP_NTOHS(IPH_LEN(iphdr));
-											WG_DEBUG("[WG_RX_IP] Allowed by rule %d (src matches), header_len=%u\n", x, (unsigned)header_len);
-											break;
-										}
+						if ((pbuf->tot_len >= IP_HLEN) && (IPH_V(iphdr) == 4)) {
+							// Check SOURCE IP (where packet came from) against peer's allowed IPs
+							// This is cryptokey routing: verify the inner packet source matches
+							// what this peer is allowed to send as.
+							ip_addr_t src_ip;
+							ip_addr_copy_from_ip4(src_ip, iphdr->src);
+							ip_addr_copy_from_ip4(dest, iphdr->dest);
+							WG_DEBUG("[WG_RX_IP] IPv4 src=%d.%d.%d.%d dest=%d.%d.%d.%d, tot_len=%u\n",
+							       ip4_addr1_16(ip_2_ip4(&src_ip)),
+							       ip4_addr2_16(ip_2_ip4(&src_ip)),
+							       ip4_addr3_16(ip_2_ip4(&src_ip)),
+							       ip4_addr4_16(ip_2_ip4(&src_ip)),
+							       ip4_addr1_16(ip_2_ip4(&dest)),
+							       ip4_addr2_16(ip_2_ip4(&dest)),
+							       ip4_addr3_16(ip_2_ip4(&dest)),
+							       ip4_addr4_16(ip_2_ip4(&dest)),
+							       (unsigned)pbuf->tot_len);
+							// Check if SOURCE IP matches this peer's allowed IPs
+							for (x=0; x < WIREGUARD_MAX_SRC_IPS; x++) {
+								if (peer->allowed_source_ips[x].valid) {
+									if (IP_ADDR_NETCMP_COMPAT(&src_ip, &peer->allowed_source_ips[x].ip, &peer->allowed_source_ips[x].mask)) {
+										dest_ok = true;
+										header_len = PP_NTOHS(IPH_LEN(iphdr));
+										WG_DEBUG("[WG_RX_IP] Allowed by rule %d (src matches), header_len=%u\n", x, (unsigned)header_len);
+										break;
 									}
 								}
-								if (!dest_ok) {
-									WG_DEBUG("[WG_RX_IP] DROPPED: src IP not in peer's allowed_source_ips\n");
-								}
 							}
+							if (!dest_ok) {
+								WG_DEBUG("[WG_RX_IP] DROPPED: src IP not in peer's allowed_source_ips\n");
+							}
+						}
 #endif /* LWIP_IPV4 */
 #if LWIP_IPV6
-							if (IPH_V(iphdr) == 6) {
-								// TODO: IPV6 support for route filtering
-								header_len = PP_NTOHS(IPH_LEN(iphdr));
-								dest_ok = true;
-							}
+						if ((pbuf->tot_len >= IP6_HLEN) && (IPH_V(iphdr) == 6)) {
+							// TODO: IPV6 support for route filtering
+							header_len = PP_NTOHS(IPH_LEN(iphdr));
+							dest_ok = true;
+						}
 #endif /* LWIP_IPV6 */
-							if (header_len <= pbuf->tot_len) {
+						if (header_len <= pbuf->tot_len) {
 
-								// 5. If the plaintext packet has not been dropped, it is inserted into the receive queue of the wg0 interface.
-								if (dest_ok) {
-									// Send packet to be processed by LWIP
-									WG_DEBUG("[WG_RX_IP] Passing %u bytes to IP layer\n", (unsigned)pbuf->tot_len);
-									// Enter the lwIP core ONLY from the tcpip_thread. netif->input is
-									// tcpip_input (set in ml_wg_mgr): posting the packet defers ip_input
-									// to the tcpip_thread. Calling ip_input() directly here runs on the
-									// wg_mgr task and races the tcpip_thread's WiFi TCP processing ->
-									// unsynchronized pbuf/PCB access -> double-free crash (pbuf.c:753).
-									if (device->netif->input(pbuf, device->netif) == ERR_OK) {
-										pbuf = NULL;  // ownership handed to the tcpip_thread queue
-									}  // else: still ours -> freed by pbuf_free() at the end of this block
-								} else {
-									WG_DEBUG("[WG_RX_IP] DROPPED: dest_ok=false\n");
-								}
+							// 5. If the plaintext packet has not been dropped, it is inserted into the receive queue of the wg0 interface.
+							if (dest_ok) {
+								// Send packet to be processed by LWIP
+								WG_DEBUG("[WG_RX_IP] Passing %u bytes to IP layer\n", (unsigned)pbuf->tot_len);
+								// Enter the lwIP core ONLY from the tcpip_thread. netif->input is
+								// tcpip_input (set in ml_wg_mgr): posting the packet defers ip_input
+								// to the tcpip_thread. Calling ip_input() directly here runs on the
+								// wg_mgr task and races the tcpip_thread's WiFi TCP processing ->
+								// unsynchronized pbuf/PCB access -> double-free crash (pbuf.c:753).
+								if (device->netif->input(pbuf, device->netif) == ERR_OK) {
+									pbuf = NULL;  // ownership handed to the tcpip_thread queue
+								}  // else: still ours -> freed by pbuf_free() at the end of this block
 							} else {
-								// IP header is corrupt or lied about packet size
-								WG_DEBUG("[WG_RX_IP] DROPPED: header_len=%u > tot_len=%u\n",
-								       (unsigned)header_len, (unsigned)pbuf->tot_len);
+								WG_DEBUG("[WG_RX_IP] DROPPED: dest_ok=false\n");
 							}
 						} else {
-							// This is a duplicate packet / replayed / too far out of order
+							// IP header is corrupt or lied about packet size
+							WG_DEBUG("[WG_RX_IP] DROPPED: header_len=%u > tot_len=%u\n",
+							       (unsigned)header_len, (unsigned)pbuf->tot_len);
 						}
 					} else {
 						// This was a keep-alive packet
 					}
+				} else if (decrypt_ok) {
+					// This is a duplicate packet / replayed / too far out of order: no state changes
+					WG_DEBUG("[WG_RX] DROPPED: replayed or too old, nonce=%llu\n", (unsigned long long)nonce);
 				}
 
 				if (pbuf) {
@@ -865,8 +867,8 @@ void wireguardif_network_rx(void *arg, struct udp_pcb *pcb, struct pbuf *p, cons
 			peer = peer_lookup_by_handshake(device, msg_cookie->receiver);
 			if (peer) {
 				if (wireguard_process_cookie_message(device, peer, msg_cookie)) {
-					// Update the peer location
-					update_peer_addr(peer, addr, port);
+					// The cookie is encrypted with a key derived from the responder's public key, so anyone who knows that key
+					// and saw the initiation can forge a reply: it may update the cookie, never the peer endpoint.
 
 					// Don't send anything out - we stay quiet until the next initiation message
 				}

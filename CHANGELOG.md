@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.5](https://github.com/fugo101/wireguard-lwip/compare/v1.0.4...v1.0.5) (2026-11-10)
+
+
+### Bug Fixes
+
+* small fixes from the architecture review ([#22](https://github.com/fugo101/wireguard-lwip/issues/22)) ([#30](https://github.com/fugo101/wireguard-lwip/issues/30)) ([5a5575e](https://github.com/fugo101/wireguard-lwip/commit/5a5575e23346855c7f09aaded7b32420d2d48576))
+
 ## [1.0.4](https://github.com/fugo101/wireguard-lwip/compare/v1.0.3...v1.0.4) (2026-11-10)
 
 

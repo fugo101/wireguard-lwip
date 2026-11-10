@@ -40,10 +40,12 @@ for variant in ipv4 dual; do
   build test_rx_replay $variant $flags
   build test_allowed_ips $variant $flags
   build test_timers $variant $flags
+  build test_small_fixes $variant $flags
   run test_rx_replay.$variant main || fail=1
   run test_rx_replay.$variant short short || fail=1
   run test_allowed_ips.$variant main || fail=1
   run test_timers.$variant main || fail=1
+  run test_small_fixes.$variant main || fail=1
 done
 echo "result: $([ $fail -eq 0 ] && echo pass || echo FAIL)"
 [ $fail -eq 0 ]

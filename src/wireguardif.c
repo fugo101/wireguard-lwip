@@ -45,7 +45,6 @@
 
 #include "wireguard.h"
 #include "crypto.h"
-#include "lwip_compat.h"
 
 #include <stdio.h>
 #include <stdbool.h>
@@ -122,7 +121,7 @@ static struct wireguard_peer *peer_lookup_by_allowed_ip(struct wireguard_device 
 		tmp = &device->peers[x];
 		if (tmp->valid) {
 			for (y=0; y < WIREGUARD_MAX_SRC_IPS; y++) {
-				if ((tmp->allowed_source_ips[y].valid) && IP_ADDR_NETCMP_COMPAT(ipaddr, &tmp->allowed_source_ips[y].ip, &tmp->allowed_source_ips[y].mask)) {
+				if ((tmp->allowed_source_ips[y].valid) && ip_addr_netcmp(ipaddr, &tmp->allowed_source_ips[y].ip, ip_2_ip4(&tmp->allowed_source_ips[y].mask))) {
 					int prefix = allowed_ip_prefix_len(&tmp->allowed_source_ips[y].mask);
 					if (prefix > result_prefix) {
 						result = tmp;
@@ -675,7 +674,7 @@ static size_t get_source_addr_port(const ip_addr_t *addr, u16_t port, uint8_t *b
 
 #if LWIP_IPV4
 	if (IP_IS_V4(addr) && (buflen >= 4)) {
-		U32TO8_BIG(buf + result, PP_NTOHL(ip4_addr_get_u32(IP_ADDR_TO_IP4(addr))));
+		U32TO8_BIG(buf + result, PP_NTOHL(ip4_addr_get_u32(ip_2_ip4(addr))));
 		result += 4;
 	}
 #endif

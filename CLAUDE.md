@@ -42,7 +42,9 @@ build a consuming ESP-IDF project against a local override of this component.
 Three layers, deliberately separated:
 
 - **`src/wireguard.c` / `wireguard.h`** — protocol core (Noise_IK handshake, keypairs,
-  replay window, cookies, base64 key parsing). No IP-stack dependency.
+  replay window, cookies, base64 key parsing). It makes no lwIP calls, but `wireguard.h`
+  uses lwIP types (`ip_addr_t`, `u16_t`, `struct netif`, `struct udp_pcb`) in the
+  device/peer structs — an upstream design.
 - **`src/wireguardif.c` / `wireguardif.h`** — lwIP glue: the `netif` driver, peer table,
   cryptokey routing, UDP rx/tx, and the periodic timer. Everything fork-specific lives here.
 - **`src/crypto.h`** — the crypto swap point. It is *only* `#define`s mapping
@@ -100,11 +102,12 @@ thread. Preserve this when touching `wireguardif_process_data_message`.
 `wireguardif_shutdown()` cancels the timer and **must** be called before
 `netif_remove`/`mem_free`, or `wireguardif_tmr` fires on freed memory.
 
-### lwIP version compat
+### IPv4-only vs dual-stack lwIP
 
-`src/lwip_compat.h` hides the dual-stack `ip_addr_t` layout change (the `u_addr` union
-in lwIP 2.2.0 / ESP-IDF 5.3+). Use `IP_ADDR_GET_IP4_U32` / `IP_ADDR_SET_IP4_U32` /
-`IP_ADDR_NETCMP_COMPAT` rather than touching `ipaddr->addr` directly.
+The `ip_addr_t` layout depends on the lwIP build, not its version: IPv4-only it is
+`ip4_addr_t` itself (`->addr`); dual-stack (IPv4+IPv6, as ESP-IDF builds it) it is a
+`u_addr` union plus a `type`. Go through lwIP's own `ip_2_ip4()` (e.g. pass
+`ip_2_ip4(&mask)` to `ip_addr_netcmp`) rather than touching `ipaddr->addr` directly.
 
 ## Conventions
 
